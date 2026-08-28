@@ -1,0 +1,28 @@
+# Airflow / Docker runtime artifacts
+logs/*
+!logs/.gitkeep
+plugins/
+
+# Raw data — only the committed sample survives this rule
+data/csv/*
+!data/csv/.gitkeep
+!data/csv/sample_players.csv
+
+# Spark local-mode / embedded Hive metastore artifacts
+**/spark-warehouse/
+**/metastore_db/
+derby.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Env / secrets
+.env
+
+# OS
+.DS_Store
+Thumbs.db

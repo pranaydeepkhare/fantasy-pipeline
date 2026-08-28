@@ -1,0 +1,4 @@
+# Installed on top of the apache/airflow base image (see Dockerfile).
+# Kept intentionally small: Spark local mode only, no cluster deps.
+pyspark==3.5.3
+pandas==2.2.3
