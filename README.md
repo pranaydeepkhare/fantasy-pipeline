@@ -122,7 +122,7 @@ the total never exceeds budget even at worst case:
 | airflow-scheduler (also hosts the Spark JVM while a task runs) | 3000m |
 
 **Measured** (`docker stats --no-stream`) on this laptop (16GB RAM, i5),
-16.08.2026, all three containers up:
+2026-08-28, all three containers up:
 
 | Service | Idle | While `spark_hive_count` task is running |
 |---|---|---|
@@ -201,6 +201,9 @@ this stack was even started — see "Deviations" below.
 
 ## Before the next step
 
+- This repo is `git init`-ed locally with one commit, but has **no GitHub
+  remote yet** — creating the GitHub repo and pushing is left to you
+  (`git remote add origin <url> && git push -u origin main`).
 - Confirm the real CSV/data source for fantasy data so ingestion DAGs can
   be written against a known schema.
 - Decide what goes in `optimizer/` (PuLP vs. OR-Tools) and how it's invoked
