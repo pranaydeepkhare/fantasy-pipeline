@@ -23,9 +23,12 @@ fantasy-pipeline/
 ├── docker-compose.yaml
 ├── Dockerfile              # Airflow base image + JRE + pyspark
 ├── dags/                   # Airflow DAG definitions (Python)
+│   ├── example_pipeline.py    # smoke test: CSV -> Spark/Hive -> COUNT(*)
+│   └── fantasy_ingestion.py   # scaffold: 4 sequential placeholder stages
 ├── include/
 │   ├── sql/                # .sql files
-│   └── hql/                # .hql / HiveQL scripts
+│   ├── hql/                # .hql / HiveQL scripts
+│   └── scripts/             # Python extraction/conversion scripts, one per DAG stage
 ├── data/
 │   └── csv/                # raw input CSVs land here (gitignored except the sample)
 ├── optimizer/              # PuLP/OR-Tools code — empty for now, separate from the SQL layer
@@ -105,6 +108,40 @@ Check the task log for a line like:
 
 ```
 Spark+Hive smoke test OK — smoke_test.players has 6 rows
+```
+
+## Ingestion scaffold (`fantasy_ingestion` DAG)
+
+`dags/fantasy_ingestion.py` is the skeleton for the real ingestion
+pipeline — **not real logic yet**, just wiring. Four tasks, chained
+sequentially (`task_1_extract >> task_2_extract >> task_3_extract >>
+task_4_extract`), each a thin wrapper around a same-named script under
+`include/scripts/`. Today every script is a no-op placeholder that just
+logs and returns, so the DAG runs green end to end with nothing real
+happening — proof the wiring works before any extraction logic exists.
+
+To fill in a stage: edit its script's `run()` function in
+`include/scripts/task_N_extract.py` (extract from the real source,
+write a CSV under `data/csv/` and/or a Hive table the way
+`example_pipeline.py` does). Rename the task/script once the real
+stages are known — `task_1_extract` etc. are deliberately generic
+placeholders.
+
+Each script also runs standalone for local iteration, without going
+through Airflow at all:
+
+```bash
+docker compose exec airflow-scheduler python /opt/airflow/include/scripts/task_1_extract.py
+```
+
+This works because `PYTHONPATH=/opt/airflow/include` is set on the
+Airflow containers (see `docker-compose.yaml`), so any DAG can
+`from scripts.whatever import run` regardless of which script it needs.
+
+Trigger the whole scaffold from the UI, or:
+
+```bash
+docker compose exec airflow-scheduler airflow dags trigger fantasy_ingestion
 ```
 
 ## Memory footprint
@@ -201,9 +238,11 @@ this stack was even started — see "Deviations" below.
 
 ## Before the next step
 
-- This repo is `git init`-ed locally with one commit, but has **no GitHub
-  remote yet** — creating the GitHub repo and pushing is left to you
-  (`git remote add origin <url> && git push -u origin main`).
+- This repo is pushed to `github.com/pranaydeepkhare/fantasy-pipeline`
+  (private, `main` branch). Local `origin` remote already points there.
+- Fill in `include/scripts/task_1_extract.py` through `task_4_extract.py`
+  with real extraction + conversion logic once the data source is known,
+  and rename the tasks/scripts in `dags/fantasy_ingestion.py` to match.
 - Confirm the real CSV/data source for fantasy data so ingestion DAGs can
   be written against a known schema.
 - Decide what goes in `optimizer/` (PuLP vs. OR-Tools) and how it's invoked

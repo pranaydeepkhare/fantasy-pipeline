@@ -26,6 +26,9 @@ x-airflow-common: &airflow-common
     # Where DAG tasks running inside this container should read/write.
     SPARK_WAREHOUSE_DIR: /opt/airflow/data/spark-warehouse
     SPARK_METASTORE_DIR: /opt/airflow/data/metastore_db
+    # Lets DAGs do `from scripts.whatever import run` regardless of which
+    # dags/*.py file is parsing — scripts live in include/scripts/.
+    PYTHONPATH: /opt/airflow/include
   volumes:
     # Git-pulled content — no rebuild/restart needed to pick up changes.
     - ./dags:/opt/airflow/dags
