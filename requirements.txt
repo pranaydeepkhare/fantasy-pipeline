@@ -2,3 +2,7 @@
 # Kept intentionally small: Spark local mode only, no cluster deps.
 pyspark==3.5.3
 pandas==2.2.3
+# Direct dependency of include/scripts/fpl_api.py. Already present
+# transitively via Airflow itself, but pinning it here documents that our
+# own code relies on it directly, not just Airflow's internals.
+requests

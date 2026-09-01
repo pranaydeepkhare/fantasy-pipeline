@@ -110,39 +110,70 @@ Check the task log for a line like:
 Spark+Hive smoke test OK — smoke_test.players has 6 rows
 ```
 
-## Ingestion scaffold (`fantasy_ingestion` DAG)
+## Ingestion pipeline (`fantasy_ingestion` DAG)
 
-`dags/fantasy_ingestion.py` is the skeleton for the real ingestion
-pipeline — **not real logic yet**, just wiring. Four tasks, chained
-sequentially (`task_1_extract >> task_2_extract >> task_3_extract >>
-task_4_extract`), each a thin wrapper around a same-named script under
-`include/scripts/`. Today every script is a no-op placeholder that just
-logs and returns, so the DAG runs green end to end with nothing real
-happening — proof the wiring works before any extraction logic exists.
+Data source: the official FPL API (`fantasy.premierleague.com/api`, no
+auth needed). Client + task scripts were reverse-engineered from the
+[vaastav/Fantasy-Premier-League](https://github.com/vaastav/Fantasy-Premier-League)
+reference scraper to figure out the real dependency graph between API
+pulls — see git history on `dags/fantasy_ingestion.py` for the full
+breakdown of which pulls are independent vs. which need another pull's
+output first.
 
-To fill in a stage: edit its script's `run()` function in
-`include/scripts/task_N_extract.py` (extract from the real source,
-write a CSV under `data/csv/` and/or a Hive table the way
-`example_pipeline.py` does). Rename the task/script once the real
-stages are known — `task_1_extract` etc. are deliberately generic
-placeholders.
+Shape — a fan-out/fan-in graph, not a straight chain:
 
-Each script also runs standalone for local iteration, without going
-through Airflow at all:
+```
+extract_bootstrap ───┐
+                      ├─→ clean_players ─→ extract_player_gw (mapped, 1 per player, parallel)
+extract_fixtures ─────┼──────────────────────────────────────┘
+                      └─────────────────────────────────────→ collect_gw ─→ merge_gw
+```
+
+| Task | Script | Status |
+|---|---|---|
+| `extract_bootstrap` | `include/scripts/extract_bootstrap.py` | **Real** — pulls bootstrap-static, writes `players_raw.csv`, `teams.csv`, `events.csv` |
+| `extract_fixtures` | `include/scripts/extract_fixtures.py` | **Real** — writes `fixtures.csv`. Runs in parallel with `extract_bootstrap`, no shared dependency |
+| `clean_players` | `include/scripts/clean_players.py` | **Real** — writes `cleaned_players.csv` + `player_idlist.csv`; returns the player-ID list the next stage maps over |
+| `extract_player_gw` | `include/scripts/extract_player_gw.py` | **Real** — one Airflow dynamic-mapped instance per player (`.expand()`), writes `data/csv/players/{id}/{history,gw}.csv` |
+| `collect_gw` | `include/scripts/collect_gw.py` | Placeholder — needs collector.py's gameweek-assembly logic ported over |
+| `merge_gw` | `include/scripts/merge_gw.py` | Placeholder — needs schema-drift-aware merge logic ported over |
+
+`include/scripts/fpl_api.py` is the shared HTTP client (retry + backoff,
+handles 429/5xx) every extract script imports from.
+
+**Verified against the live API**: a full run (no `player_limit`) pulled
+all **629 players** — bootstrap + fixtures in parallel, then a 629-way
+parallel fan-out (capped at 4 concurrent by
+`AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG`), then `collect_gw` correctly
+waited for every one of those plus `extract_fixtures` before starting.
+Zero failures. Wall time ~14.5 minutes at that concurrency; scheduler
+memory barely moved (~500MB — these are lightweight I/O-bound tasks, not
+JVM-heavy like the Spark smoke test).
+
+For fast local iteration, trigger with `player_limit` to skip most of the
+fan-out:
 
 ```bash
-docker compose exec airflow-scheduler python /opt/airflow/include/scripts/task_1_extract.py
+docker compose exec airflow-scheduler airflow dags trigger fantasy_ingestion --conf '{"player_limit": 5}'
+```
+
+Leave it unset (or `null`) for a full run over every player. Each script
+also runs standalone, no Airflow needed:
+
+```bash
+docker compose exec airflow-scheduler python /opt/airflow/include/scripts/extract_bootstrap.py
 ```
 
 This works because `PYTHONPATH=/opt/airflow/include` is set on the
-Airflow containers (see `docker-compose.yaml`), so any DAG can
-`from scripts.whatever import run` regardless of which script it needs.
+Airflow containers (see `docker-compose.yaml`), so any script can
+`from scripts.fpl_api import ...` regardless of which one is running.
 
-Trigger the whole scaffold from the UI, or:
-
-```bash
-docker compose exec airflow-scheduler airflow dags trigger fantasy_ingestion
-```
+**Next to fill in**: `collect_gw.py` and `merge_gw.py` — port
+`collector.py`'s `collect_gw()`/`merge_gw()` logic from the reference
+repo, joining each player's `gw.csv` with `teams.csv`/`fixtures.csv`
+into one gameweek's rows, then into `merged_gw.csv`. That's also the
+natural point to switch from CSV to loading into a Hive table via
+Spark, following `example_pipeline.py`'s `enableHiveSupport()` pattern.
 
 ## Memory footprint
 
@@ -173,6 +204,15 @@ The `airflow-webserver` figure (999 MiB / 1200 MiB limit, ~83%) is the
 biggest single consumer and the closest to its cap; if you add more DAGs
 and it starts getting OOM-killed, raise its `mem_limit` or drop
 `AIRFLOW__WEBSERVER__WORKERS` from 2 to 1.
+
+**Update, 2026-09-01, after adding `fantasy_ingestion`**: `airflow-webserver`
+has crept up further on its own (no config change) to **1.14 GiB / 1.17 GiB
+— 97%** with two DAGs now registered, just from normal UI/DB-polling
+overhead over a longer-running session, not from the ingestion DAG itself
+(`airflow-scheduler` barely moved during the 629-player fan-out — ~500 MiB,
+since these are lightweight `requests` calls, not JVM processes). Worth
+raising `airflow-webserver`'s `mem_limit` or dropping to 1 worker before
+adding more DAGs, rather than waiting for an OOM kill.
 
 **This does not include Docker Desktop's own WSL2 VM overhead**, which is
 separate from the container numbers above and typically adds another
